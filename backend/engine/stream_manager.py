@@ -1,4 +1,6 @@
 import os
+import sys
+import shutil
 import time
 import asyncio
 import subprocess
@@ -14,6 +16,12 @@ from backend.engine.clipper import video_clipper
 from backend.engine.kick_monitor import kick_monitor
 
 logger = logging.getLogger("vice_clips.stream")
+
+def get_ytdlp_cmd() -> list:
+    bin_path = shutil.which("yt-dlp")
+    if bin_path:
+        return [bin_path]
+    return [sys.executable, "-m", "yt_dlp"]
 
 class StreamManager:
     def __init__(self):
@@ -68,7 +76,7 @@ class StreamManager:
 
         # YouTube probing via yt-dlp
         try:
-            cmd = ["yt-dlp", "--dump-json", "--no-warnings", stream_url]
+            cmd = get_ytdlp_cmd() + ["--dump-json", "--no-warnings", stream_url]
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15)
             if res.returncode == 0:
                 import json
@@ -119,8 +127,7 @@ class StreamManager:
 
         # Launch recording via yt-dlp (supports both YouTube and Kick)
         try:
-            cmd = [
-                "yt-dlp",
+            cmd = get_ytdlp_cmd() + [
                 "-o", self.current_recording_path,
                 "--no-part",
                 "--buffer-size", "16K",

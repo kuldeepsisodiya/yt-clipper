@@ -12,6 +12,8 @@ import {
   Clock,
   Video,
   Globe,
+  ExternalLink,
+  Layers,
 } from 'lucide-react';
 import { StreamStatusResponse, Highlight } from '../types';
 import { ScoreBadge } from './ScoreBadge';
@@ -39,14 +41,40 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
   const [streamInputUrl, setStreamInputUrl] = useState('');
   const [markerCategory, setMarkerCategory] = useState('Police Chase');
   const [markerNotes, setMarkerNotes] = useState('');
+  const [viewSource, setViewSource] = useState<'embed' | 'buffer'>('embed');
 
   const isLive = streamStatus?.is_active ?? false;
   const stream = streamStatus?.stream;
-  const isKickStream = (stream?.youtube_url && stream.youtube_url.includes('kick.com')) || (stream?.title && stream.title.includes('[KICK]'));
+  const streamUrl = stream?.youtube_url || '';
+  const isKickStream = (streamUrl && streamUrl.includes('kick.com')) || (stream?.title && stream.title.includes('[KICK]'));
   const durationSec = streamStatus?.duration_seconds ?? 0;
   const chatRate = streamStatus?.chat_rate ?? 0;
   const baseline = streamStatus?.chat_baseline ?? 5.0;
   const audioDb = streamStatus?.audio_level ?? -32.0;
+
+  // Resolve Live Embed Source for ongoing Kick or YouTube streams
+  const getLiveEmbed = () => {
+    if (!streamUrl) return null;
+    if (streamUrl.includes('kick.com')) {
+      const match = streamUrl.replace(/https?:\/\//i, '').replace(/www\./i, '').match(/kick\.com\/([a-zA-Z0-9_\-]+)/i);
+      if (match && match[1]) {
+        return {
+          type: 'kick',
+          src: `https://player.kick.com/${match[1]}?autoplay=true&muted=true`,
+        };
+      }
+    }
+    const ytMatch = streamUrl.match(/^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=|live\/)([^#&?]*).*/);
+    if (ytMatch && ytMatch[2].length === 11) {
+      return {
+        type: 'youtube',
+        src: `https://www.youtube-nocookie.com/embed/${ytMatch[2]}?autoplay=1&mute=1&playsinline=1`,
+      };
+    }
+    return null;
+  };
+
+  const liveEmbed = getLiveEmbed();
 
   const formatDuration = (sec: number) => {
     const hrs = Math.floor(sec / 3600);
@@ -148,7 +176,7 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
                   type="text"
                   placeholder={
                     platform === 'kick'
-                      ? 'kick.com/xqc or username'
+                      ? 'kick.com/rakazone or username'
                       : 'https://youtube.com/watch?v=...'
                   }
                   value={streamInputUrl}
@@ -190,14 +218,26 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
         <div className="lg:col-span-2 space-y-4">
           <div className="relative aspect-video rounded-xl bg-black border border-white/10 overflow-hidden shadow-glass-elevated flex items-center justify-center group">
             {isLive ? (
-              <video
-                src="/api/media/simulated_stream.mp4"
-                controls
-                autoPlay
-                loop
-                muted
-                className="w-full h-full object-cover"
-              />
+              viewSource === 'embed' && liveEmbed ? (
+                /* Ongoing Live Stream Iframe Player */
+                <iframe
+                  src={liveEmbed.src}
+                  title="Ongoing Live Stream"
+                  className="w-full h-full border-0"
+                  allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                  allowFullScreen
+                />
+              ) : (
+                /* Local Recording Buffer Stream */
+                <video
+                  src="/api/media/simulated_stream.mp4"
+                  controls
+                  autoPlay
+                  loop
+                  muted
+                  className="w-full h-full object-cover"
+                />
+              )
             ) : (
               <div className="text-center p-8 space-y-3">
                 <div className="w-16 h-16 rounded-2xl bg-card border border-white/10 flex items-center justify-center mx-auto text-secondary-text shadow-inner">
@@ -209,9 +249,9 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
                 </p>
 
                 {/* Quick Kick Channel Suggestions */}
-                <div className="pt-2 flex items-center justify-center gap-2">
+                <div className="pt-2 flex items-center justify-center gap-2 flex-wrap">
                   <span className="text-[11px] text-secondary-text font-mono">Popular Kick streams:</span>
-                  {['xqc', 'adinross', 'westcol'].map((ch) => (
+                  {['rakazone', 'xqc', 'adinross', 'westcol'].map((ch) => (
                     <button
                       key={ch}
                       onClick={() => {
@@ -230,12 +270,38 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
             {/* Overlays on player */}
             {isLive && (
               <>
-                <div className="absolute top-4 left-4 flex items-center gap-2 px-2.5 py-1 rounded-md bg-black/60 backdrop-blur-md border border-white/10 text-[11px] font-mono text-white">
+                <div className="absolute top-4 left-4 flex items-center gap-2 px-2.5 py-1 rounded-md bg-black/75 backdrop-blur-md border border-white/10 text-[11px] font-mono text-white">
                   <span className="w-2 h-2 rounded-full bg-status-error animate-ping" />
                   <span>REC {formatDuration(durationSec)}</span>
                 </div>
 
                 <div className="absolute top-4 right-4 flex items-center gap-2">
+                  {/* Feed Selector Toggle */}
+                  {liveEmbed && (
+                    <div className="flex items-center bg-black/80 backdrop-blur-md p-0.5 rounded-lg border border-white/10 text-[10px] font-mono">
+                      <button
+                        onClick={() => setViewSource('embed')}
+                        className={`px-2 py-0.5 rounded transition-all ${
+                          viewSource === 'embed'
+                            ? 'bg-accent-coral text-white font-bold'
+                            : 'text-secondary-text hover:text-white'
+                        }`}
+                      >
+                        Live Stream
+                      </button>
+                      <button
+                        onClick={() => setViewSource('buffer')}
+                        className={`px-2 py-0.5 rounded transition-all ${
+                          viewSource === 'buffer'
+                            ? 'bg-accent-coral text-white font-bold'
+                            : 'text-secondary-text hover:text-white'
+                        }`}
+                      >
+                        Buffer
+                      </button>
+                    </div>
+                  )}
+
                   <span
                     className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
                       isKickStream
@@ -245,9 +311,18 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
                   >
                     {isKickStream ? 'KICK LIVE' : 'YT LIVE'}
                   </span>
-                  <span className="px-2 py-0.5 rounded bg-black/60 backdrop-blur-md border border-white/10 text-[11px] font-mono text-accent-coral">
-                    GTA VI 1080p60
-                  </span>
+
+                  {streamUrl && (
+                    <a
+                      href={streamUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="p-1 rounded bg-black/60 hover:bg-black/90 text-white/80 hover:text-white border border-white/10 transition-colors"
+                      title="Open stream in external browser tab"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
+                  )}
                 </div>
               </>
             )}

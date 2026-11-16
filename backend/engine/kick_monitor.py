@@ -8,7 +8,7 @@ import websockets
 
 logger = logging.getLogger("vice_clips.kick")
 
-PUSHER_WS_URL = "wss://ws-us2.pusher.com/app/eb1d5f283081a78b932c?protocol=7&client=js&version=7.4.0&flash=false"
+PUSHER_WS_URL = "wss://ws-us2.pusher.com/app/34bf7a0ff419a2a775b9?protocol=7&client=js&version=8.4.0-rc2&flash=false"
 
 class KickMonitor:
     def __init__(self):
@@ -111,9 +111,9 @@ class KickMonitor:
                             data = json.loads(message)
                             event = data.get("event")
 
-                            if event == "App\\Events\\ChatMessageEvent":
+                            if event in ["App\\Events\\ChatMessageEvent", "App\\Events\\ChatMessageSentEvent"]:
                                 inner_data = json.loads(data.get("data", "{}"))
-                                author = inner_data.get("sender", {}).get("username", "KickViewer")
+                                author = inner_data.get("sender", {}).get("username") or inner_data.get("user", {}).get("username", "KickViewer")
                                 content = inner_data.get("content", "")
                                 if self.message_callback and content:
                                     self.message_callback(author, content)
