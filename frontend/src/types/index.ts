@@ -30,6 +30,7 @@ export interface Highlight {
   chat_rate: number;
   audio_level: number;
   speech_text?: string;
+  platform?: 'youtube' | 'kick';
   duration_sec: number;
   detection_type: 'detected' | 'inferred' | 'manual';
   status: ProcessingStatus;
@@ -51,7 +52,9 @@ export interface Clip {
   duration: number;
   aspect_ratio: string;
   crop_position: number;
-  subtitle_style: 'clean_white' | 'bold_gaming' | 'minimal_cinematic';
+  subtitle_style: 'viral_pop' | 'vice_pill' | 'bold_outline' | 'minimal_cinematic' | string;
+  subtitle_position?: number;
+  highlight_color?: string;
   burned_subtitles: boolean;
   file_size_bytes: number;
   status: ProcessingStatus;
@@ -66,6 +69,7 @@ export interface StreamData {
   title: string;
   channel_name: string;
   thumbnail_url?: string;
+  platform?: 'youtube' | 'kick';
   status: 'idle' | 'recording' | 'simulating' | 'stopped';
   started_at?: string;
 }

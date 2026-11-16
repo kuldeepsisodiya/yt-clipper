@@ -11,6 +11,7 @@ from backend.engine.chat_monitor import ChatMonitor
 from backend.engine.event_detector import EventDetector
 from backend.engine.audio_analyzer import AudioAnalyzer
 from backend.engine.clipper import video_clipper
+from backend.engine.kick_monitor import kick_monitor
 
 logger = logging.getLogger("vice_clips.stream")
 
@@ -22,6 +23,7 @@ class StreamManager:
         self.current_recording_path: Optional[str] = None
         self.start_time: float = 0.0
         self.is_running: bool = False
+        self.platform: str = "youtube"
 
         # Subsystems
         self.chat_monitor = ChatMonitor(
@@ -47,12 +49,26 @@ class StreamManager:
             except Exception as e:
                 pass
 
-    def get_stream_metadata(self, youtube_url: str) -> Dict[str, Any]:
+    async def get_stream_metadata(self, stream_url: str) -> Dict[str, Any]:
         """
-        Uses yt-dlp to inspect stream/video metadata.
+        Inspects stream metadata for YouTube or Kick.
         """
+        if "kick.com" in stream_url.lower():
+            slug = kick_monitor.extract_slug(stream_url) or "kick_stream"
+            info = await kick_monitor.fetch_channel_info(slug)
+            return {
+                "title": info.get("title", f"GTA VI — {slug} Live"),
+                "channel": info.get("username", slug),
+                "thumbnail": info.get("thumbnail"),
+                "is_live": info.get("is_live", True),
+                "url": stream_url,
+                "platform": "kick",
+                "chatroom_id": info.get("chatroom_id")
+            }
+
+        # YouTube probing via yt-dlp
         try:
-            cmd = ["yt-dlp", "--dump-json", "--no-warnings", youtube_url]
+            cmd = ["yt-dlp", "--dump-json", "--no-warnings", stream_url]
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15)
             if res.returncode == 0:
                 import json
@@ -62,25 +78,28 @@ class StreamManager:
                     "channel": info.get("uploader", info.get("channel", "Vice City Streamer")),
                     "thumbnail": info.get("thumbnail", "https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&w=1200&q=80"),
                     "is_live": info.get("is_live", False),
-                    "url": youtube_url
+                    "url": stream_url,
+                    "platform": "youtube"
                 }
         except Exception as e:
             logger.warning(f"yt-dlp metadata probe warning: {e}")
 
         return {
-            "title": "GTA VI - Vice City Nights Livestream",
+            "title": "GTA VI — Vice City Nights Livestream",
             "channel": "Vice City Gaming",
             "thumbnail": "https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&w=1200&q=80",
             "is_live": True,
-            "url": youtube_url
+            "url": stream_url,
+            "platform": "youtube"
         }
 
-    async def start_stream(self, youtube_url: str) -> Dict[str, Any]:
+    async def start_stream(self, stream_url: str) -> Dict[str, Any]:
         if self.is_running:
             await self.stop_stream()
 
         stream_id = f"stream_{int(time.time())}"
-        metadata = self.get_stream_metadata(youtube_url)
+        metadata = await self.get_stream_metadata(stream_url)
+        self.platform = metadata.get("platform", "youtube")
 
         self.active_stream_id = stream_id
         self.start_time = time.time()
@@ -88,8 +107,8 @@ class StreamManager:
 
         database.create_stream(
             stream_id=stream_id,
-            youtube_url=youtube_url,
-            title=metadata["title"],
+            youtube_url=stream_url,
+            title=f"[{self.platform.upper()}] {metadata['title']}",
             channel_name=metadata["channel"],
             thumbnail_url=metadata["thumbnail"],
             status="recording"
@@ -98,25 +117,34 @@ class StreamManager:
         recording_file = RECORDINGS_DIR / f"{stream_id}_buffer.mp4"
         self.current_recording_path = str(recording_file)
 
-        # Launch background recording via yt-dlp piped to FFmpeg
-        # command: yt-dlp -f bestvideo[ext=mp4]+bestaudio[ext=m4a]/best -o - URL | ffmpeg ...
+        # Launch recording via yt-dlp (supports both YouTube and Kick)
         try:
-            # We record stream in chunks or rolling buffer
             cmd = [
                 "yt-dlp",
                 "-o", self.current_recording_path,
                 "--no-part",
                 "--buffer-size", "16K",
-                youtube_url
+                stream_url
             ]
             self.recording_process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL
             )
-            logger.info(f"Stream recording started: {stream_id}")
+            logger.info(f"Stream recording started for {self.platform}: {stream_id}")
         except Exception as e:
-            logger.error(f"Failed to launch yt-dlp recording process: {e}")
+            logger.error(f"Failed to launch yt-dlp recording: {e}")
+
+        # If Kick platform, connect to live Pusher chatroom
+        if self.platform == "kick" and metadata.get("chatroom_id"):
+            def on_kick_message(author: str, text: str):
+                offset = time.time() - self.start_time if self.start_time else 0.0
+                spike = self.chat_monitor.add_message(author, text, offset)
+                if spike:
+                    asyncio.create_task(self._handle_chat_spike(spike))
+
+            await kick_monitor.connect_chat(metadata["chatroom_id"], on_kick_message)
+            logger.info(f"Connected live Kick chatroom {metadata['chatroom_id']}")
 
         # Start background monitor loop
         asyncio.create_task(self._stream_monitor_loop(stream_id))
@@ -126,7 +154,8 @@ class StreamManager:
             "title": metadata["title"],
             "channel": metadata["channel"],
             "thumbnail": metadata["thumbnail"],
-            "status": "recording"
+            "status": "recording",
+            "platform": self.platform
         }
 
     async def stop_stream(self):
@@ -134,6 +163,9 @@ class StreamManager:
             return
 
         self.is_running = False
+        if self.platform == "kick":
+            await kick_monitor.stop()
+
         if self.recording_process:
             try:
                 self.recording_process.terminate()
@@ -146,6 +178,61 @@ class StreamManager:
             database.update_stream_status(self.active_stream_id, "stopped")
             logger.info(f"Stream {self.active_stream_id} stopped")
             self.active_stream_id = None
+
+    async def _handle_chat_spike(self, spike: Dict[str, Any]):
+        """Triggered automatically when chat spike trips the 2.5x threshold."""
+        if not self.active_stream_id:
+            return
+
+        offset = spike.get("timestamp_offset", 0.0)
+        sample_msgs = spike.get("sample_messages", [])
+        
+        category, det_type, conf = self.event_detector.infer_category(sample_msgs)
+        score, reasons = self.event_detector.calculate_highlight_score(
+            chat_spike_ratio=spike.get("spike_ratio", 2.5),
+            reaction_density=spike.get("reaction_density", 0.5),
+            audio_level_db=-14.0,
+            has_excited_speech=True,
+            is_manual_marker=False
+        )
+
+        highlight_id = database.insert_highlight(
+            stream_id=self.active_stream_id,
+            timestamp_offset=round(offset, 1),
+            category=category.value,
+            score=score,
+            reasons=reasons,
+            chat_rate=float(spike.get("count", 15)),
+            audio_level=-14.0,
+            speech_text=f"Live {self.platform.capitalize()} moment: {category.value}",
+            duration_sec=30.0,
+            detection_type=det_type,
+            status="Processing"
+        )
+
+        # Enqueue clip generation if media is ready
+        if self.current_recording_path and os.path.exists(self.current_recording_path):
+            video_clipper.enqueue_clip_generation(
+                stream_id=self.active_stream_id,
+                highlight_id=highlight_id,
+                source_media_path=self.current_recording_path,
+                start_time_sec=max(0.0, offset - settings.clip_before_seconds),
+                duration_sec=30.0,
+                title=f"{category.value} ({self.platform.capitalize()})",
+                crop_position=settings.default_crop_position,
+                burn_subtitles=True,
+                subtitle_style=settings.subtitle_style
+            )
+
+        await self.broadcast_event("highlight_detected", {
+            "id": highlight_id,
+            "stream_id": self.active_stream_id,
+            "category": category.value,
+            "score": score,
+            "reasons": reasons,
+            "offset": round(offset, 1),
+            "platform": self.platform
+        })
 
     async def _stream_monitor_loop(self, stream_id: str):
         """Monitors live activity, records periodic metrics, logs and checks spikes."""
@@ -170,7 +257,8 @@ class StreamManager:
                 "timestamp_offset": round(offset, 1),
                 "chat_rate": rate,
                 "baseline": baseline,
-                "audio_level": audio_db
+                "audio_level": audio_db,
+                "platform": self.platform
             })
 
             await asyncio.sleep(2.0)
@@ -178,7 +266,6 @@ class StreamManager:
     async def trigger_manual_marker(self, category: str, notes: Optional[str] = None, duration: float = 30.0) -> str:
         """Allows creator to drop an instant highlight marker during the stream."""
         if not self.active_stream_id:
-            # Fall back to latest stream or create ad-hoc
             latest = database.get_latest_stream()
             stream_id = latest["id"] if latest else "stream_manual"
         else:
@@ -207,7 +294,6 @@ class StreamManager:
             status="Detected"
         )
 
-        # Enqueue clip generation if media is available
         if self.current_recording_path and os.path.exists(self.current_recording_path):
             video_clipper.enqueue_clip_generation(
                 stream_id=stream_id,
@@ -217,7 +303,7 @@ class StreamManager:
                 duration_sec=duration,
                 title=f"{category} (Manual)",
                 crop_position=settings.default_crop_position,
-                burn_subtitles=settings.burn_subtitles_default,
+                burn_subtitles=True,
                 subtitle_style=settings.subtitle_style
             )
 
@@ -227,7 +313,8 @@ class StreamManager:
             "category": category,
             "score": score,
             "reasons": reasons,
-            "offset": round(offset, 1)
+            "offset": round(offset, 1),
+            "platform": self.platform
         })
 
         return highlight_id

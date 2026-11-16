@@ -2,8 +2,9 @@ import os
 import subprocess
 import asyncio
 import logging
+import re
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from backend.config import CLIPS_DIR, THUMBNAILS_DIR
 from backend import database
 
@@ -43,9 +44,12 @@ class VideoClipper:
         duration_sec: float,
         title: str,
         crop_position: float = 0.5,
-        burn_subtitles: bool = False,
-        subtitle_style: str = "clean_white",
-        speech_text: Optional[str] = None
+        burn_subtitles: bool = True,
+        subtitle_style: str = "viral_pop",
+        speech_text: Optional[str] = None,
+        subtitle_position: float = 0.75,
+        highlight_color: str = "#FFE600",
+        font_size: str = "md"
     ) -> str:
         clip_id = f"clip_{highlight_id}"
         
@@ -60,7 +64,10 @@ class VideoClipper:
             "crop_position": crop_position,
             "burn_subtitles": burn_subtitles,
             "subtitle_style": subtitle_style,
-            "speech_text": speech_text
+            "speech_text": speech_text,
+            "subtitle_position": subtitle_position,
+            "highlight_color": highlight_color,
+            "font_size": font_size
         }
 
         # Update highlight status to Processing
@@ -79,22 +86,34 @@ class VideoClipper:
         dur = job["duration_sec"]
         title = job["title"]
         crop_pos = job.get("crop_position", 0.5)
-        burn_subs = job.get("burn_subtitles", False)
-        sub_style = job.get("subtitle_style", "clean_white")
+        burn_subs = job.get("burn_subtitles", True)
+        sub_style = job.get("subtitle_style", "viral_pop")
         speech_text = job.get("speech_text")
+        sub_pos = job.get("subtitle_position", 0.75)
+        hl_color = job.get("highlight_color", "#FFE600")
 
         landscape_filename = f"{clip_id}_landscape.mp4"
         vertical_filename = f"{clip_id}_vertical.mp4"
         thumb_filename = f"{clip_id}_thumb.jpg"
         srt_filename = f"{clip_id}.srt"
+        ass_filename = f"{clip_id}.ass"
 
         landscape_path = str(CLIPS_DIR / landscape_filename)
         vertical_path = str(CLIPS_DIR / vertical_filename)
         thumb_path = str(THUMBNAILS_DIR / thumb_filename)
         srt_path = str(CLIPS_DIR / srt_filename)
+        ass_path = str(CLIPS_DIR / ass_filename)
 
-        # 1. Generate SRT subtitle file if speech or text is available
-        self._generate_srt_file(srt_path, speech_text or f"Vice City Highlight: {title}", dur)
+        # 1. Generate viral short-form subtitle files (both SRT and ASS with karaoke styling)
+        self._generate_styled_subtitles(
+            srt_path=srt_path,
+            ass_path=ass_path,
+            text=speech_text or f"GTA VI: {title}",
+            duration=dur,
+            style=sub_style,
+            highlight_color=hl_color,
+            vertical_pos=sub_pos
+        )
 
         # 2. Extract Landscape clip (16:9 H.264 MP4 with sync)
         cmd_landscape = [
@@ -116,7 +135,7 @@ class VideoClipper:
             logger.error(f"FFmpeg landscape export failed: {res.stderr}")
             raise RuntimeError(f"FFmpeg landscape export error: {res.stderr[-200:]}")
 
-        # 3. Extract High-Res Video Thumbnail from middle of clip
+        # 3. Extract High-Res Video Thumbnail
         thumb_time = max(0.0, start + min(dur / 2.0, 3.0))
         cmd_thumb = [
             "ffmpeg", "-y",
@@ -128,13 +147,7 @@ class VideoClipper:
         ]
         subprocess.run(cmd_thumb, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        # 4. Generate 9:16 Vertical Short (1080x1920) with intelligent crop position
-        # FFmpeg filter:
-        # Given 16:9 1920x1080 input:
-        # vertical crop aspect ratio 9:16 means width = height * 9 / 16. For 1080 height, width = 607.5.
-        # X offset is calculated as: (in_w - out_w) * crop_position
-        # e.g., (1920 - 608) * crop_position.
-        # Then scale up to 1080x1920!
+        # 4. Generate 9:16 Vertical Short (1080x1920) with horizontal crop positioning
         x_expr = f"(in_w - in_h*9/16)*{crop_pos}"
         video_filter = f"crop=in_h*9/16:in_h:{x_expr}:0,scale=1080:1920:flags=lanczos"
 
@@ -142,11 +155,14 @@ class VideoClipper:
         has_sub_filter = False
         try:
             chk = subprocess.run(["ffmpeg", "-filters"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-            has_sub_filter = "subtitles" in chk.stdout.lower()
+            has_sub_filter = "subtitles" in chk.stdout.lower() or "ass" in chk.stdout.lower()
         except Exception:
             pass
 
-        if burn_subs and has_sub_filter and os.path.exists(srt_path):
+        if burn_subs and has_sub_filter and os.path.exists(ass_path):
+            escaped_ass = ass_path.replace(":", "\\:").replace("'", "\\'")
+            video_filter += f",ass='{escaped_ass}'"
+        elif burn_subs and has_sub_filter and os.path.exists(srt_path):
             escaped_srt = srt_path.replace(":", "\\:").replace("'", "\\'")
             video_filter += f",subtitles='{escaped_srt}'"
 
@@ -189,22 +205,101 @@ class VideoClipper:
         database.update_highlight_status(highlight_id, "Ready", clip_id=clip_id)
         logger.info(f"Clip {clip_id} generated successfully!")
 
-    def _generate_srt_file(self, srt_path: str, text: str, duration: float):
-        """Generates a clean SRT subtitle file for the clip."""
-        lines = [
-            "1",
-            "00:00:01,000 --> 00:00:05,000",
-            text[:60],
-            ""
-        ]
-        if len(text) > 60:
-            lines.extend([
-                "2",
-                "00:00:05,500 --> 00:00:10,000",
-                text[60:120],
-                ""
-            ])
+    def _generate_styled_subtitles(
+        self,
+        srt_path: str,
+        ass_path: str,
+        text: str,
+        duration: float,
+        style: str = "viral_pop",
+        highlight_color: str = "#FFE600",
+        vertical_pos: float = 0.75
+    ):
+        """
+        Splits speech into viral punchy 2-4 word phrases with modern TikTok / Shorts styling.
+        Generates both SRT (universal) and ASS (Advanced SubStation Alpha with precise font, outline, and positioning).
+        """
+        words = text.strip().split()
+        if not words:
+            words = ["GTA VI", "VICE CITY", "HIGHLIGHT"]
+
+        # Chunk into groups of 3-4 words for fast viral reading
+        chunks: List[str] = []
+        chunk_size = 3
+        for i in range(0, len(words), chunk_size):
+            chunks.append(" ".join(words[i:i + chunk_size]).upper())
+
+        num_chunks = len(chunks)
+        time_per_chunk = min(2.5, max(1.2, duration / max(1, num_chunks)))
+
+        srt_lines = []
+        ass_events = []
+
+        margin_v = int(vertical_pos * 100) # Margin from bottom in ASS (e.g. 75)
+
+        for i, chunk in enumerate(chunks):
+            start_s = i * time_per_chunk
+            end_s = min(duration, (i + 1) * time_per_chunk)
+
+            # Format SRT timestamp
+            start_srt = self._sec_to_srt_time(start_s)
+            end_srt = self._sec_to_srt_time(end_s)
+
+            srt_lines.append(str(i + 1))
+            srt_lines.append(f"{start_srt} --> {end_srt}")
+            srt_lines.append(chunk)
+            srt_lines.append("")
+
+            # Format ASS timestamp
+            start_ass = self._sec_to_ass_time(start_s)
+            end_ass = self._sec_to_ass_time(end_s)
+            # Add dynamic highlight on the last word of chunk
+            chunk_words = chunk.split()
+            if len(chunk_words) > 1:
+                highlighted_chunk = " ".join(chunk_words[:-1]) + f" {{\\c&H00E6FF&}}{chunk_words[-1]}{{\\r}}"
+            else:
+                highlighted_chunk = f"{{\\c&H00E6FF&}}{chunk}{{\\r}}"
+
+            ass_events.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{highlighted_chunk}")
+
+        # Write SRT
         with open(srt_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
+            f.write("\n".join(srt_lines))
+
+        # Write ASS (Advanced SubStation Alpha)
+        ass_header = f"""[Script Info]
+Title: Vice Clips Viral Subtitles
+ScriptType: v4.00+
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+YCbCr Matrix: TV.709
+PlayResX: 1080
+PlayResY: 1920
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial Black,62,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,1,0,1,5,3,2,40,40,{margin_v},1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+        with open(ass_path, "w", encoding="utf-8") as f:
+            f.write(ass_header + "\n".join(ass_events) + "\n")
+
+    @staticmethod
+    def _sec_to_srt_time(sec: float) -> str:
+        hrs = int(sec // 3600)
+        mins = int((sec % 3600) // 60)
+        secs = int(sec % 60)
+        ms = int((sec - int(sec)) * 1000)
+        return f"{hrs:02d}:{mins:02d}:{secs:02d},{ms:03d}"
+
+    @staticmethod
+    def _sec_to_ass_time(sec: float) -> str:
+        hrs = int(sec // 3600)
+        mins = int((sec % 3600) // 60)
+        secs = int(sec % 60)
+        cs = int((sec - int(sec)) * 100)
+        return f"{hrs:d}:{mins:02d}:{secs:02d}.{cs:02d}"
 
 video_clipper = VideoClipper()

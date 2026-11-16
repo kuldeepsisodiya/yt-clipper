@@ -97,8 +97,12 @@ class ClipEditRequest(BaseModel):
     end_trim: float = 0.0
     crop_position: float = 0.5  # 0.0 = left, 0.5 = center, 1.0 = right
     aspect_ratio: str = "9:16"   # "9:16" or "16:9"
-    burn_subtitles: bool = False
-    subtitle_style: SubtitleStyle = SubtitleStyle.CLEAN_WHITE
+    burn_subtitles: bool = True
+    subtitle_style: str = "viral_pop" # "viral_pop", "vice_pill", "bold_outline", "minimal_cinematic"
+    subtitle_text: Optional[str] = None
+    subtitle_position: float = 0.75 # 0.1 top to 0.9 bottom
+    highlight_color: str = "#FFE600" # "#FFE600", "#FF795F", "#00F0FF", "#75D6A0"
+    font_size: str = "md"
     preset: str = "shorts"
 
 class StreamInfo(BaseModel):

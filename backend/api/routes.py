@@ -164,8 +164,11 @@ async def edit_clip(clip_id: str, req: ClipEditRequest):
         title=clip["title"],
         crop_position=req.crop_position,
         burn_subtitles=req.burn_subtitles,
-        subtitle_style=req.subtitle_style.value if hasattr(req.subtitle_style, 'value') else req.subtitle_style,
-        speech_text=highlight.get("speech_text")
+        subtitle_style=req.subtitle_style,
+        speech_text=req.subtitle_text or highlight.get("speech_text"),
+        subtitle_position=req.subtitle_position,
+        highlight_color=req.highlight_color,
+        font_size=req.font_size
     )
 
     return {"status": "reprocessing", "clip_id": new_clip_id}

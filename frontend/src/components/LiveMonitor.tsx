@@ -11,6 +11,7 @@ import {
   Flame,
   Clock,
   Video,
+  Globe,
 } from 'lucide-react';
 import { StreamStatusResponse, Highlight } from '../types';
 import { ScoreBadge } from './ScoreBadge';
@@ -34,12 +35,14 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
   onManualMarker,
   onSelectHighlight,
 }) => {
+  const [platform, setPlatform] = useState<'youtube' | 'kick'>('kick');
   const [streamInputUrl, setStreamInputUrl] = useState('');
   const [markerCategory, setMarkerCategory] = useState('Police Chase');
   const [markerNotes, setMarkerNotes] = useState('');
 
   const isLive = streamStatus?.is_active ?? false;
   const stream = streamStatus?.stream;
+  const isKickStream = (stream?.youtube_url && stream.youtube_url.includes('kick.com')) || (stream?.title && stream.title.includes('[KICK]'));
   const durationSec = streamStatus?.duration_seconds ?? 0;
   const chatRate = streamStatus?.chat_rate ?? 0;
   const baseline = streamStatus?.chat_baseline ?? 5.0;
@@ -57,8 +60,12 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
 
   const handleStartSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (streamInputUrl.trim()) {
-      onStartStream(streamInputUrl.trim());
+    let url = streamInputUrl.trim();
+    if (url) {
+      if (platform === 'kick' && !url.startsWith('http') && !url.includes('kick.com')) {
+        url = `https://kick.com/${url}`;
+      }
+      onStartStream(url);
       setStreamInputUrl('');
     }
   };
@@ -80,35 +87,83 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
             }`}
           />
           <div>
-            <h2 className="font-display font-semibold text-primary-text text-base">
-              {isLive ? stream?.title || 'Active Stream' : 'Live Stream Ingestion Engine'}
-            </h2>
+            <div className="flex items-center gap-2">
+              <h2 className="font-display font-semibold text-primary-text text-base">
+                {isLive ? stream?.title || 'Active Stream' : 'Live Stream Ingestion Engine'}
+              </h2>
+              {isLive && (
+                <span
+                  className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
+                    isKickStream
+                      ? 'bg-[#53FC18]/20 text-[#53FC18] border border-[#53FC18]/40'
+                      : 'bg-[#FF0000]/20 text-[#FF0000] border border-[#FF0000]/40'
+                  }`}
+                >
+                  {isKickStream ? 'KICK.COM' : 'YOUTUBE'}
+                </span>
+              )}
+            </div>
             <p className="text-xs text-secondary-text">
               {isLive
                 ? `Ingesting: ${stream?.channel_name || 'Channel'} • Recording Buffer Active`
-                : 'Enter a YouTube Livestream URL or run Demo Mode to monitor highlights'}
+                : 'Connect live YouTube or Kick.com streams to automatically detect GTA VI highlights'}
             </p>
           </div>
         </div>
 
+        {/* Input & Stream Trigger Actions */}
         <div className="flex items-center gap-3 w-full md:w-auto">
           {!isLive ? (
-            <form onSubmit={handleStartSubmit} className="flex items-center gap-2 w-full md:w-auto">
-              <input
-                type="text"
-                placeholder="https://youtube.com/watch?v=..."
-                value={streamInputUrl}
-                onChange={(e) => setStreamInputUrl(e.target.value)}
-                className="px-3 py-1.5 rounded-lg bg-surface-subtle border border-border text-xs text-primary-text placeholder:text-secondary-text focus:outline-none focus:border-accent-coral w-full md:w-72"
-              />
-              <button
-                type="submit"
-                className="px-4 py-1.5 rounded-lg bg-accent-coral hover:brightness-110 text-white font-medium text-xs flex items-center gap-1.5 transition-all interactive-tap shadow-coral-glow shrink-0"
-              >
-                <Play className="w-3.5 h-3.5 fill-current" />
-                <span>Record</span>
-              </button>
-            </form>
+            <div className="flex flex-col sm:flex-row items-center gap-2 w-full md:w-auto">
+              {/* Platform Switcher */}
+              <div className="flex items-center bg-surface-subtle p-0.5 rounded-lg border border-border text-xs">
+                <button
+                  type="button"
+                  onClick={() => setPlatform('kick')}
+                  className={`px-2.5 py-1 rounded-md font-semibold transition-all interactive-tap flex items-center gap-1 ${
+                    platform === 'kick'
+                      ? 'bg-[#53FC18]/20 text-[#53FC18] border border-[#53FC18]/30 shadow-sm'
+                      : 'text-secondary-text hover:text-primary-text'
+                  }`}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#53FC18]" />
+                  <span>Kick</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPlatform('youtube')}
+                  className={`px-2.5 py-1 rounded-md font-semibold transition-all interactive-tap flex items-center gap-1 ${
+                    platform === 'youtube'
+                      ? 'bg-[#FF0000]/20 text-[#FF4444] border border-[#FF0000]/30 shadow-sm'
+                      : 'text-secondary-text hover:text-primary-text'
+                  }`}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#FF0000]" />
+                  <span>YouTube</span>
+                </button>
+              </div>
+
+              <form onSubmit={handleStartSubmit} className="flex items-center gap-2 w-full md:w-auto">
+                <input
+                  type="text"
+                  placeholder={
+                    platform === 'kick'
+                      ? 'kick.com/xqc or username'
+                      : 'https://youtube.com/watch?v=...'
+                  }
+                  value={streamInputUrl}
+                  onChange={(e) => setStreamInputUrl(e.target.value)}
+                  className="px-3 py-1.5 rounded-lg bg-surface-subtle border border-border text-xs text-primary-text placeholder:text-secondary-text focus:outline-none focus:border-accent-coral w-full sm:w-56"
+                />
+                <button
+                  type="submit"
+                  className="px-3.5 py-1.5 rounded-lg bg-accent-coral hover:brightness-110 text-white font-medium text-xs flex items-center gap-1.5 transition-all interactive-tap shadow-coral-glow shrink-0"
+                >
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  <span>Record</span>
+                </button>
+              </form>
+            </div>
           ) : (
             <button
               onClick={onStopStream}
@@ -150,8 +205,25 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
                 </div>
                 <h3 className="text-sm font-semibold text-primary-text">Stream Stage Idle</h3>
                 <p className="text-xs text-secondary-text max-w-sm mx-auto">
-                  Start an ingestion session or click "Simulate Spike" to generate an automated test stream.
+                  Enter a Kick or YouTube livestream URL above, or click "Simulate Spike" to generate an automated test highlight.
                 </p>
+
+                {/* Quick Kick Channel Suggestions */}
+                <div className="pt-2 flex items-center justify-center gap-2">
+                  <span className="text-[11px] text-secondary-text font-mono">Popular Kick streams:</span>
+                  {['xqc', 'adinross', 'westcol'].map((ch) => (
+                    <button
+                      key={ch}
+                      onClick={() => {
+                        setPlatform('kick');
+                        onStartStream(`https://kick.com/${ch}`);
+                      }}
+                      className="px-2 py-0.5 rounded bg-surface-subtle hover:bg-elevated border border-white/10 text-[11px] font-mono text-[#53FC18] transition-colors interactive-tap"
+                    >
+                      kick.com/{ch}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -163,8 +235,19 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
                   <span>REC {formatDuration(durationSec)}</span>
                 </div>
 
-                <div className="absolute top-4 right-4 px-2.5 py-1 rounded-md bg-black/60 backdrop-blur-md border border-white/10 text-[11px] font-mono text-accent-coral">
-                  GTA VI 1080p60 H.264
+                <div className="absolute top-4 right-4 flex items-center gap-2">
+                  <span
+                    className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
+                      isKickStream
+                        ? 'bg-[#53FC18]/30 text-[#53FC18] border border-[#53FC18]/50'
+                        : 'bg-[#FF0000]/30 text-[#FF4444] border border-[#FF0000]/50'
+                    }`}
+                  >
+                    {isKickStream ? 'KICK LIVE' : 'YT LIVE'}
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-black/60 backdrop-blur-md border border-white/10 text-[11px] font-mono text-accent-coral">
+                    GTA VI 1080p60
+                  </span>
                 </div>
               </>
             )}
@@ -224,7 +307,7 @@ export const LiveMonitor: React.FC<LiveMonitorProps> = ({
               <div className="flex justify-between text-xs">
                 <span className="text-secondary-text flex items-center gap-1">
                   <MessageSquare className="w-3.5 h-3.5" />
-                  Chat Velocity
+                  Chat Velocity {isKickStream && <span className="text-[#53FC18] text-[10px] font-bold font-mono">(Kick Pusher)</span>}
                 </span>
                 <span className="font-mono font-semibold text-primary-text">
                   {chatRate.toFixed(1)} / 10s

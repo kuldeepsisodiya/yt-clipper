@@ -36,10 +36,11 @@ async def run_watcher(youtube_url: str):
             await simulator.stop()
             return
 
-    print(f"\n[INFO] Connecting to YouTube livestream: {youtube_url}")
+    platform_name = "Kick" if "kick.com" in youtube_url.lower() else "YouTube"
+    print(f"\n[INFO] Connecting to {platform_name} livestream: {youtube_url}")
     stream = await stream_manager.start_stream(youtube_url)
-    print(f"[INFO] Attached to stream: {stream['title']} ({stream['channel']})")
-    print(f"[INFO] Monitoring chat velocity, audio energy, and GTA VI events...")
+    print(f"[INFO] Attached to stream: {stream['title']} ({stream['channel']}) [{stream.get('platform', 'unknown').upper()}]")
+    print(f"[INFO] Monitoring {platform_name} chat velocity, audio energy, and GTA VI events...")
     print(f"[INFO] Press Ctrl+C to stop recording.\n")
 
     def on_event(ev_type, data):
@@ -72,9 +73,11 @@ async def run_watcher(youtube_url: str):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: ./watch.sh <YOUTUBE_URL_OR_DEMO>")
-        print("Example: ./watch.sh https://www.youtube.com/watch?v=live_stream_id")
-        print("Example: ./watch.sh demo")
+        print("Usage: ./watch.sh <STREAM_URL_OR_DEMO>")
+        print("Examples:")
+        print("  ./watch.sh https://www.youtube.com/watch?v=live_stream_id")
+        print("  ./watch.sh https://kick.com/xqc")
+        print("  ./watch.sh demo")
         sys.exit(1)
 
     url = sys.argv[1]

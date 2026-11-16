@@ -10,6 +10,9 @@ Instead of relying solely on chat spikes, VICE CLIPS implements a modular, multi
 
 ## Key Features
 
+- **Multi-Platform Livestream Ingestion**:
+  - **YouTube Live**: Full chat spike analysis and rolling recording buffer.
+  - **Kick.com**: Real-time Pusher WebSocket chatroom monitoring, channel discovery, and stream capture.
 - **GTA VI Event Recognition**: 15 distinct categories (Police Chases, 5-Star Wanted levels, Shootouts, Stunts, Vehicle Crashes, NPC interactions, Glitches, Ragdoll physics, etc.).
 - **Transparent Multi-Signal Scoring (0–100)**:
   - Chat spike velocity (10s buckets, 3-minute rolling median comparison).
@@ -17,6 +20,12 @@ Instead of relying solely on chat spikes, VICE CLIPS implements a modular, multi
   - Audio RMS energy decibel analysis (loud reactions, sound peaks).
   - Speech excitement patterns & Whisper transcription.
   - Creator markers.
+- **Viral Short-Form Subtitle Studio**:
+  - Dynamic active word pop & karaoke highlighting.
+  - 4 Viral Subtitle Aesthetics: *Viral Pop* (CapCut/Shorts style with neon pop), *Vice Pill* (glowing neon badge), *Bold Outline* (classic gaming stroke), and *Cinematic*.
+  - Live caption text editor with custom highlight accent colors (#FFE600 Viral Yellow, #FF795F Vice Coral, #00F0FF Cyber Cyan, #75D6A0 Neon Mint).
+  - Flexible positioning: Top, Center, Bottom (15% to 85% height) and font size scales (S, M, L, XL).
+  - Both `.srt` and Advanced SubStation Alpha (`.ass`) output generation.
 - **Automated Video Processing & Clipping**:
   - H.264 MP4 export with strict audio/video synchronization.
   - Vertical 9:16 portrait formatting (1080x1920) with configurable horizontal crop tracking.
