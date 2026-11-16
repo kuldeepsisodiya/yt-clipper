@@ -31,10 +31,14 @@ yarn-error.log*
 out/
 
 # Media and Output directories
+data/
 downloads/
 output/
 clips/
 temp/
+*.db
+*.sqlite
+*.sqlite3
 *.mp4
 *.mkv
 *.webm

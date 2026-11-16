@@ -1,7 +1,7 @@
 import sqlite3
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 from backend.config import DB_PATH, settings
 from backend.models import (
@@ -140,9 +140,9 @@ def get_latest_stream() -> Optional[Dict[str, Any]]:
 def create_stream(stream_id: str, youtube_url: str, title: str, channel_name: str, thumbnail_url: str, status: str = "recording") -> Dict[str, Any]:
     conn = get_db_connection()
     cursor = conn.cursor()
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     cursor.execute("""
-        INSERT INTO streams (id, youtube_url, title, channel_name, thumbnail_url, status, started_at)
+        INSERT OR REPLACE INTO streams (id, youtube_url, title, channel_name, thumbnail_url, status, started_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (stream_id, youtube_url, title, channel_name, thumbnail_url, status, now))
     conn.commit()
@@ -160,7 +160,7 @@ def create_stream(stream_id: str, youtube_url: str, title: str, channel_name: st
 def update_stream_status(stream_id: str, status: str):
     conn = get_db_connection()
     cursor = conn.cursor()
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     cursor.execute("""
         UPDATE streams SET status = ?, stopped_at = ? WHERE id = ?
     """, (status, now if status == 'stopped' else None, stream_id))
@@ -184,7 +184,7 @@ def insert_highlight(
     conn = get_db_connection()
     cursor = conn.cursor()
     highlight_id = str(uuid.uuid4())[:8]
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
 
     cursor.execute("""
         INSERT INTO highlights (
@@ -307,7 +307,7 @@ def insert_clip(
     conn = get_db_connection()
     cursor = conn.cursor()
     clip_id = str(uuid.uuid4())[:8]
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
 
     cursor.execute("""
         INSERT INTO clips (
@@ -385,7 +385,7 @@ def log_activity(
 ):
     conn = get_db_connection()
     cursor = conn.cursor()
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     cursor.execute("""
         INSERT INTO activity_logs (
             stream_id, timestamp_offset, chat_rate, audio_level, baseline,

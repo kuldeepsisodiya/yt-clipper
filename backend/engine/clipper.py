@@ -138,8 +138,15 @@ class VideoClipper:
         x_expr = f"(in_w - in_h*9/16)*{crop_pos}"
         video_filter = f"crop=in_h*9/16:in_h:{x_expr}:0,scale=1080:1920:flags=lanczos"
 
-        # Apply subtitle burning if requested
-        if burn_subs and os.path.exists(srt_path):
+        # Apply subtitle burning if supported by local ffmpeg build
+        has_sub_filter = False
+        try:
+            chk = subprocess.run(["ffmpeg", "-filters"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            has_sub_filter = "subtitles" in chk.stdout.lower()
+        except Exception:
+            pass
+
+        if burn_subs and has_sub_filter and os.path.exists(srt_path):
             escaped_srt = srt_path.replace(":", "\\:").replace("'", "\\'")
             video_filter += f",subtitles='{escaped_srt}'"
 
