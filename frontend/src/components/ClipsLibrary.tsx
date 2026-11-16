@@ -228,9 +228,17 @@ export const ClipsLibrary: React.FC<ClipsLibraryProps> = ({
 
             <div className="relative aspect-video rounded-xl bg-black overflow-hidden flex items-center justify-center">
               <video
+                key={playingClip.id}
                 src={playingClip.file_path_vertical || playingClip.file_path_landscape || ''}
                 controls
                 autoPlay
+                playsInline
+                onError={(e) => {
+                  const target = e.currentTarget;
+                  if (playingClip.file_path_landscape && target.src !== playingClip.file_path_landscape) {
+                    target.src = playingClip.file_path_landscape;
+                  }
+                }}
                 className="w-full h-full object-contain"
               />
             </div>

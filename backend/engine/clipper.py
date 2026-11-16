@@ -16,6 +16,19 @@ class VideoClipper:
         self.worker_task = None
         self.processing_clips = set()
 
+    @staticmethod
+    def _has_filter(filter_name: str) -> bool:
+        """Check if FFmpeg supports an exact filter name without false positive substring matches."""
+        try:
+            chk = subprocess.run(["ffmpeg", "-filters"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            for line in chk.stdout.splitlines():
+                m = re.match(r'^\s*([T\.SC]+)\s+([a-zA-Z0-9_]+)\s+', line)
+                if m and m.group(2) == filter_name:
+                    return True
+        except Exception:
+            pass
+        return False
+
     def start_worker(self):
         if not self.worker_task or self.worker_task.done():
             self.worker_task = asyncio.create_task(self._process_queue())
@@ -147,43 +160,54 @@ class VideoClipper:
         ]
         subprocess.run(cmd_thumb, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        # 4. Generate 9:16 Vertical Short (1080x1920) with horizontal crop positioning
+        # Check for real filter support (exact name match, avoid substring matching like 'bass' matching 'ass')
+        has_ass_filter = self._has_filter("ass")
+        has_sub_filter = self._has_filter("subtitles")
+
         x_expr = f"(in_w - in_h*9/16)*{crop_pos}"
         video_filter = f"crop=in_h*9/16:in_h:{x_expr}:0,scale=1080:1920:flags=lanczos"
 
-        # Apply subtitle burning if supported by local ffmpeg build
-        has_sub_filter = False
-        try:
-            chk = subprocess.run(["ffmpeg", "-filters"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-            has_sub_filter = "subtitles" in chk.stdout.lower() or "ass" in chk.stdout.lower()
-        except Exception:
-            pass
-
-        if burn_subs and has_sub_filter and os.path.exists(ass_path):
+        # 4. Generate 9:16 Vertical Short (1080x1920)
+        # Cropping from landscape_path is 10x faster and guarantees 100% audio-video sync
+        applied_sub_filter = video_filter
+        if burn_subs and has_ass_filter and os.path.exists(ass_path):
             escaped_ass = ass_path.replace(":", "\\:").replace("'", "\\'")
-            video_filter += f",ass='{escaped_ass}'"
+            applied_sub_filter += f",ass='{escaped_ass}'"
         elif burn_subs and has_sub_filter and os.path.exists(srt_path):
             escaped_srt = srt_path.replace(":", "\\:").replace("'", "\\'")
-            video_filter += f",subtitles='{escaped_srt}'"
+            applied_sub_filter += f",subtitles='{escaped_srt}'"
 
         cmd_vertical = [
             "ffmpeg", "-y",
-            "-ss", str(start),
-            "-i", src,
-            "-t", str(dur),
-            "-vf", video_filter,
+            "-i", landscape_path,
+            "-vf", applied_sub_filter,
             "-c:v", "libx264",
             "-preset", "veryfast",
             "-crf", "22",
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-pix_fmt", "yuv420p",
+            "-c:a", "copy",
             "-movflags", "+faststart",
             vertical_path
         ]
-        subprocess.run(cmd_vertical, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        res_v = subprocess.run(cmd_vertical, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if res_v.returncode != 0:
+            logger.warning(f"Vertical export with filter failed, retrying clean crop: {res_v.stderr[-200:]}")
+            cmd_clean = [
+                "ffmpeg", "-y",
+                "-i", landscape_path,
+                "-vf", video_filter,
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-crf", "22",
+                "-c:a", "copy",
+                "-movflags", "+faststart",
+                vertical_path
+            ]
+            res_clean = subprocess.run(cmd_clean, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if res_clean.returncode != 0:
+                logger.error(f"FFmpeg vertical clean export also failed: {res_clean.stderr[-200:]}")
 
-        file_size = os.path.getsize(vertical_path) if os.path.exists(vertical_path) else os.path.getsize(landscape_path)
+        vertical_ready = os.path.exists(vertical_path) and os.path.getsize(vertical_path) > 0
+        file_size = os.path.getsize(vertical_path) if vertical_ready else os.path.getsize(landscape_path)
 
         # 5. Insert into Database
         database.insert_clip(
@@ -196,14 +220,14 @@ class VideoClipper:
             subtitle_style=sub_style,
             burned_subtitles=burn_subs,
             file_path_landscape=f"/api/media/{landscape_filename}",
-            file_path_vertical=f"/api/media/{vertical_filename}",
+            file_path_vertical=f"/api/media/{vertical_filename}" if vertical_ready else f"/api/media/{landscape_filename}",
             thumbnail_url=f"/api/media/{thumb_filename}",
             srt_url=f"/api/media/{srt_filename}",
             file_size_bytes=file_size
         )
 
         database.update_highlight_status(highlight_id, "Ready", clip_id=clip_id)
-        logger.info(f"Clip {clip_id} generated successfully!")
+        logger.info(f"Clip {clip_id} generated successfully (vertical ready: {vertical_ready})!")
 
     def _generate_styled_subtitles(
         self,

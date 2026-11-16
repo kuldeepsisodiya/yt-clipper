@@ -125,9 +125,8 @@ async def delete_highlight_endpoint(highlight_id: str):
 
 # Clips routes
 @router.get("/clips")
-async def list_clips(category: Optional[str] = None):
-    current = database.get_current_stream()
-    stream_id = current["id"] if current else None
+async def list_clips(stream_id: Optional[str] = None, category: Optional[str] = None):
+    # Return clips (all by default so the Studio Clips Library & Editor have full access across streams)
     return database.get_clips(stream_id=stream_id, category=category)
 
 @router.get("/clips/{clip_id}")
@@ -147,12 +146,20 @@ async def edit_clip(clip_id: str, req: ClipEditRequest):
     if not highlight:
         raise HTTPException(status_code=404, detail="Associated highlight not found")
 
-    # Re-generate clip with new trims/crops
-    src = stream_manager.current_recording_path or simulator.sample_media_path
-    if not src or not os.path.exists(src):
-        raise HTTPException(status_code=400, detail="Source media recording not found")
+    # Locate source media: live recording, or existing clip landscape file, or sample media
+    clip_landscape_file = CLIPS_DIR / f"{clip_id}_landscape.mp4"
+    if stream_manager.current_recording_path and os.path.exists(stream_manager.current_recording_path):
+        src = stream_manager.current_recording_path
+        start_sec = max(0.0, highlight["timestamp_offset"] - settings.clip_before_seconds + req.start_trim)
+    elif clip_landscape_file.exists():
+        src = str(clip_landscape_file)
+        start_sec = max(0.0, req.start_trim)
+    elif simulator.sample_media_path and os.path.exists(simulator.sample_media_path):
+        src = simulator.sample_media_path
+        start_sec = max(0.0, req.start_trim)
+    else:
+        raise HTTPException(status_code=400, detail="Source media recording not found on disk")
 
-    start_sec = max(0.0, highlight["timestamp_offset"] - settings.clip_before_seconds + req.start_trim)
     dur = max(5.0, (highlight["duration_sec"] - req.start_trim - req.end_trim))
 
     new_clip_id = video_clipper.enqueue_clip_generation(
@@ -172,6 +179,40 @@ async def edit_clip(clip_id: str, req: ClipEditRequest):
     )
 
     return {"status": "reprocessing", "clip_id": new_clip_id}
+
+@router.post("/highlights/{highlight_id}/generate-clip")
+async def generate_clip_for_highlight(highlight_id: str):
+    highlight = database.get_highlight_by_id(highlight_id)
+    if not highlight:
+        raise HTTPException(status_code=404, detail="Highlight not found")
+
+    # Find source
+    src = stream_manager.current_recording_path
+    if not src or not os.path.exists(src):
+        # Check if there is an existing recording file in RECORDINGS_DIR
+        recordings = list(RECORDINGS_DIR.glob(f"{highlight['stream_id']}*.mp4"))
+        if recordings:
+            src = str(recordings[0])
+        elif simulator.sample_media_path and os.path.exists(simulator.sample_media_path):
+            src = simulator.sample_media_path
+
+    if not src or not os.path.exists(src):
+        raise HTTPException(status_code=400, detail="No source recording found for stream")
+
+    clip_id = video_clipper.enqueue_clip_generation(
+        stream_id=highlight["stream_id"],
+        highlight_id=highlight["id"],
+        source_media_path=src,
+        start_time_sec=max(0.0, highlight["timestamp_offset"] - settings.clip_before_seconds),
+        duration_sec=highlight.get("duration_sec", 30.0),
+        title=f"{highlight['category']} Highlight",
+        crop_position=settings.default_crop_position,
+        burn_subtitles=True,
+        subtitle_style=settings.subtitle_style,
+        speech_text=highlight.get("speech_text")
+    )
+
+    return {"status": "enqueued", "clip_id": clip_id}
 
 @router.delete("/clips/{clip_id}")
 async def delete_clip_endpoint(clip_id: str):
@@ -252,8 +293,8 @@ async def update_app_settings(new_cfg: Dict[str, Any]):
     )
     return {"status": "updated", "settings": new_cfg}
 
-# Media Streaming with HTTP 206 Partial Content (Range header support for fast HTML5 video seek!)
-@router.get("/media/{filename}")
+# Media Streaming with HTTP 206 Partial Content & HEAD support (Range header for fast HTML5 video seek)
+@router.api_route("/media/{filename}", methods=["GET", "HEAD"])
 async def serve_media(filename: str, request: Request):
     # Locate file in clips, thumbnails, or recordings
     candidates = [
@@ -274,6 +315,16 @@ async def serve_media(filename: str, request: Request):
     range_header = request.headers.get("range")
 
     content_type = "video/mp4" if filename.endswith(".mp4") else "image/jpeg" if filename.endswith((".jpg", ".jpeg")) else "text/plain"
+
+    if request.method == "HEAD":
+        return Response(
+            status_code=200,
+            headers={
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(file_size),
+                "Content-Type": content_type,
+            }
+        )
 
     if not range_header or not filename.endswith(".mp4"):
         return FileResponse(str(target_path), media_type=content_type)

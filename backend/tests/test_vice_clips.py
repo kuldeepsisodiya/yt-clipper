@@ -36,6 +36,10 @@ def test_database_init_and_crud(tmp_path):
     assert h["category"] == "Police Chase"
     assert len(h["reasons"]) == 2
 
+    # Clean up test records
+    database.delete_highlight(hl_id)
+    database.update_stream_status(stream_id, "stopped")
+
 def test_chat_monitor_spike_detection():
     monitor = ChatMonitor(
         bucket_seconds=10,

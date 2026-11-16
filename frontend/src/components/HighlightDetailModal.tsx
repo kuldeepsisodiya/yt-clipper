@@ -59,16 +59,24 @@ export const HighlightDetailModal: React.FC<HighlightDetailModalProps> = ({
           </button>
         </div>
 
-        {/* Video preview / thumbnail */}
-        <div className="relative aspect-video rounded-xl bg-black border border-white/10 overflow-hidden">
-          {highlight.thumbnail_url ? (
+        {/* Video preview / thumbnail with inline player */}
+        <div className="relative aspect-video rounded-xl bg-black border border-white/10 overflow-hidden group">
+          {highlight.clip_id ? (
+            <video
+              src={`/api/media/${highlight.clip_id}_landscape.mp4`}
+              controls
+              playsInline
+              poster={highlight.thumbnail_url}
+              className="w-full h-full object-contain"
+            />
+          ) : highlight.thumbnail_url ? (
             <img src={highlight.thumbnail_url} alt="" className="w-full h-full object-cover" />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-xs text-secondary-text font-mono">
               Raw clip preview stream ready
             </div>
           )}
-          <div className="absolute top-3 right-3">
+          <div className="absolute top-3 right-3 pointer-events-none">
             <StatusBadge status={highlight.status} />
           </div>
         </div>

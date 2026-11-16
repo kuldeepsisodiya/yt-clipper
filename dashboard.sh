@@ -26,7 +26,7 @@ echo "=========================================================="
 echo ""
 
 # Launch Backend in background
-python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 &
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload &
 BACKEND_PID=$!
 
 # Launch Frontend in background

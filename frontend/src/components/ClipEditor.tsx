@@ -18,6 +18,8 @@ import {
   AlignVerticalJustifyCenter,
   Palette,
   Check,
+  AlertTriangle,
+  Loader2,
 } from 'lucide-react';
 import { Highlight, Clip } from '../types';
 import { editClip } from '../services/api';
@@ -37,9 +39,11 @@ export const ClipEditor: React.FC<ClipEditorProps> = ({
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [isMuted, setIsMuted] = useState(false);
+  const [isMuted, setIsMuted] = useState(true); // Default muted so browsers allow immediate autoplay
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(highlight.duration_sec || 30);
+  const [hasVideoError, setHasVideoError] = useState(false);
+  const [triedLandscapeFallback, setTriedLandscapeFallback] = useState(false);
 
   // Video Formatting States
   const [aspectRatio, setAspectRatio] = useState<'9:16' | '16:9'>('9:16');
@@ -59,14 +63,51 @@ export const ClipEditor: React.FC<ClipEditorProps> = ({
   const [highlightColor, setHighlightColor] = useState<string>('#FFE600'); // Viral Yellow, Coral, Cyan, Mint
   const [fontSize, setFontSize] = useState<'sm' | 'md' | 'lg' | 'xl'>('lg');
 
+  const rawVertical = clip?.file_path_vertical;
+  const rawLandscape = clip?.file_path_landscape;
+
+  const getVideoSource = () => {
+    if (aspectRatio === '9:16') {
+      if (rawVertical && !triedLandscapeFallback) return rawVertical;
+      if (rawLandscape) return rawLandscape;
+    } else {
+      if (rawLandscape) return rawLandscape;
+      if (rawVertical) return rawVertical;
+    }
+    return '/api/media/simulated_stream.mp4';
+  };
+
+  const videoSource = getVideoSource();
+
+  // Reset fallback and error states when highlight changes
+  useEffect(() => {
+    setTriedLandscapeFallback(false);
+    setHasVideoError(false);
+    setCurrentTime(0);
+    setIsPlaying(false);
+  }, [highlight.id]);
+
   const togglePlay = () => {
     if (videoRef.current) {
       if (isPlaying) {
         videoRef.current.pause();
+        setIsPlaying(false);
       } else {
-        videoRef.current.play();
+        videoRef.current
+          .play()
+          .then(() => setIsPlaying(true))
+          .catch((err) => {
+            console.warn('Playback blocked or failed, retrying muted:', err);
+            if (videoRef.current) {
+              videoRef.current.muted = true;
+              setIsMuted(true);
+              videoRef.current
+                .play()
+                .then(() => setIsPlaying(true))
+                .catch(console.error);
+            }
+          });
       }
-      setIsPlaying(!isPlaying);
     }
   };
 
@@ -103,11 +144,11 @@ export const ClipEditor: React.FC<ClipEditorProps> = ({
     }
   };
 
-  const videoSource = clip?.file_path_vertical || clip?.file_path_landscape || '/api/media/simulated_stream.mp4';
-
   // Calculate dynamic active word based on currentTime
   const words = customSubtitleText.trim().split(/\s+/);
   const activeWordIndex = words.length > 0 ? Math.floor((currentTime / Math.max(1, duration)) * words.length * 2.5) % words.length : 0;
+
+  const isClipProcessing = highlight.status === 'Processing' && !clip;
 
   const fontSizes = {
     sm: 'text-sm md:text-base',
@@ -158,21 +199,97 @@ export const ClipEditor: React.FC<ClipEditorProps> = ({
             >
               <video
                 ref={videoRef}
+                key={`${highlight.id}_${aspectRatio}_${videoSource}`}
                 src={videoSource}
+                autoPlay
+                playsInline
+                muted={isMuted}
+                onPlay={() => setIsPlaying(true)}
+                onPause={() => setIsPlaying(false)}
                 onTimeUpdate={handleTimeUpdate}
                 onLoadedMetadata={() => {
-                  if (videoRef.current) setDuration(videoRef.current.duration || 30);
+                  if (videoRef.current) {
+                    setDuration(videoRef.current.duration || 30);
+                    videoRef.current.play().catch(() => {
+                      if (videoRef.current) {
+                        videoRef.current.muted = true;
+                        setIsMuted(true);
+                        videoRef.current.play().catch(console.error);
+                      }
+                    });
+                  }
                 }}
-                className="w-full h-full object-cover"
+                onError={() => {
+                  if (!triedLandscapeFallback && rawLandscape && videoSource === rawVertical) {
+                    console.warn('Vertical clip unavailable, falling back to landscape clip');
+                    setTriedLandscapeFallback(true);
+                  } else {
+                    setHasVideoError(true);
+                  }
+                }}
+                className="w-full h-full object-cover cursor-pointer"
                 style={{
                   objectPosition: `${cropPosition * 100}% center`,
                 }}
+                onClick={togglePlay}
               />
 
-              {/* Advanced Dynamic Subtitle Overlay */}
-              {burnSubtitles && (
+              {/* Processing Overlay if clip is rendering in background */}
+              {isClipProcessing && (
+                <div className="absolute inset-0 bg-black/85 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center z-20 space-y-3">
+                  <div className="w-12 h-12 rounded-full border-2 border-accent-coral/20 border-t-accent-coral animate-spin shadow-coral-glow" />
+                  <span className="font-display font-bold text-sm text-primary-text tracking-wide">
+                    ENCODING HIGHLIGHT CLIP
+                  </span>
+                  <p className="text-xs text-secondary-text max-w-xs font-mono">
+                    Extracting live stream buffer and generating 9:16 vertical short...
+                  </p>
+                  <span className="px-2.5 py-1 rounded-full bg-accent-coral/10 text-[11px] font-mono text-accent-coral border border-accent-coral/30">
+                    Live Buffer Slicer Active
+                  </span>
+                </div>
+              )}
+
+              {/* Video Error Card with Instant Retry */}
+              {hasVideoError && (
+                <div className="absolute inset-0 bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center z-20 space-y-3">
+                  <div className="w-10 h-10 rounded-full bg-status-error/15 border border-status-error/40 flex items-center justify-center text-status-error">
+                    <AlertTriangle className="w-5 h-5" />
+                  </div>
+                  <span className="text-sm font-semibold text-primary-text">Media Buffer Syncing</span>
+                  <p className="text-xs text-secondary-text max-w-xs">
+                    The live stream buffer slice is writing to disk or initializing. Click retry to refresh.
+                  </p>
+                  <button
+                    onClick={() => {
+                      setHasVideoError(false);
+                      setTriedLandscapeFallback(false);
+                      if (videoRef.current) videoRef.current.load();
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-surface-subtle hover:bg-white/10 border border-white/10 text-xs font-medium text-primary-text flex items-center gap-1.5 transition-colors"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Retry Playback</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Click-to-Play Glass Overlay Icon when Paused */}
+              {!isPlaying && !isClipProcessing && !hasVideoError && (
                 <div
-                  className="absolute inset-x-3 text-center pointer-events-none select-none transition-all duration-200"
+                  onClick={togglePlay}
+                  className="absolute inset-0 flex items-center justify-center bg-black/35 backdrop-blur-[2px] transition-all cursor-pointer group z-10"
+                >
+                  <div className="w-16 h-16 rounded-full bg-black/70 border border-white/20 flex items-center justify-center text-white shadow-glass-elevated group-hover:scale-110 group-hover:border-accent-coral transition-transform">
+                    <Play className="w-7 h-7 fill-current translate-x-0.5 text-accent-coral" />
+                  </div>
+                </div>
+              )}
+
+              {/* Advanced Dynamic Subtitle Overlay */}
+              {burnSubtitles && !isClipProcessing && !hasVideoError && (
+                <div
+                  className="absolute inset-x-3 text-center pointer-events-none select-none transition-all duration-200 z-10"
                   style={{ top: `${subtitlePosition * 100}%`, transform: 'translateY(-50%)' }}
                 >
                   {subtitleStyle === 'viral_pop' && (
